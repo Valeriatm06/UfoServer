@@ -3,28 +3,32 @@ package co.edu.uptc.models;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import co.edu.uptc.utilities.ClientHandler;
-import co.edu.uptc.models.UfoModel;  // Importamos UfoModel
 
 public class Server {
 
     private ServerSocket serverSocket;
     private int port;
     private ExecutorService executorService;
-    private UfoModel ufoModel;  // Creamos una instancia de UfoModel
+    private UfoModel ufoModel;
+    private List<ClientHandler> clients;
+    private ClientHandler firstClient;
 
     public Server(int port) throws IOException {
         this.port = port;
         executorService = Executors.newCachedThreadPool();
-          // Inicializamos el modelo de UFOs
+        this.clients = new ArrayList<>(); 
+        ufoModel = new UfoModel(this);
     }
 
     public void openConnection() {
         try {
-            serverSocket = new ServerSocket(port);  // Creamos el ServerSocket
+            serverSocket = new ServerSocket(port);
             System.out.println("Puerto disponible " + port);
         } catch (IOException e) {
             e.printStackTrace();
@@ -35,15 +39,24 @@ public class Server {
         while (true) {
             try {
                 System.out.println("Esperando cliente...");
-                Socket clientSocket = serverSocket.accept(); 
-                ufoModel = new UfoModel(clientSocket); // Acepta la conexión de un cliente
+                Socket clientSocket = serverSocket.accept();
                 System.out.println("Cliente conectado");
-
-                // Ahora pasamos la instancia de UfoModel al ClientHandler
-                executorService.submit(new ClientHandler(clientSocket, ufoModel));
+                ClientHandler clientHandler = new ClientHandler(clientSocket, ufoModel, this);
+                clients.add(clientHandler);  
+                if(firstClient == null){
+                    firstClient = clientHandler;
+                    firstClient.setFirst(true);
+                }
+                executorService.submit(clientHandler);
             } catch (IOException e) {
                 e.printStackTrace();
             }
+        }
+    }
+
+    public synchronized void sendMessageToAllClients(String message) throws IOException{
+        for (ClientHandler client : clients) {
+            client.sendMessage(message);
         }
     }
 }

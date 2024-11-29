@@ -9,6 +9,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import com.google.gson.Gson;
 
@@ -22,6 +24,7 @@ public class UfoModel{
     private List<Ufo> ufos;
     private boolean running;
     private Ufo selectedUfo;
+    private int ufoCount;
     private int totalCrashedCount;
     private int totalArrivedCount;
     private int stoppedUfosCount;
@@ -31,20 +34,22 @@ public class UfoModel{
     public static final int ARRIVAL_AREA_Y = 500; 
     public static final int ARRIVAL_AREA_WIDTH = 200; 
     public static final int ARRIVAL_AREA_HEIGHT = 100;
-    private ClientHandler clientHandler;
+    private ExecutorService movementExecutor;
+    private Server server;  
 
-    public UfoModel(Socket socket) throws IOException{
+    public UfoModel(Server server) throws IOException {
         this.ufos = new CopyOnWriteArrayList<>();
+        this.movementExecutor = Executors.newCachedThreadPool(); 
         totalCrashedCount = 0;
         totalArrivedCount = 0;
         stoppedUfosCount = 0;
         this.running = false;
-        clientHandler = new ClientHandler(socket, this);
+        this.server = server;
     }
 
-    
-    public void startGame(int ufoNumber, double speed, int appearanceTime){
+    public void startGame(int ufoNumber, double speed, int appearanceTime) {
         resetGameCounters();
+        ufoCount = ufoNumber;
         ufos.clear();
         running = true;
         Random random = new Random();
@@ -55,14 +60,19 @@ public class UfoModel{
     private void createAndMoveUfos(int ufoNumber, Random random, double speed, int appearanceTime) {
         for (int i = 0; i < ufoNumber; i++) {
             if (!running) break;
+
             Ufo newUfo = createNewUfo(random, speed);
-            ufos.add(newUfo);
-            updateUfosList();
-            startUfoMovement(newUfo);
+            synchronized (ufos) {
+                ufos.add(newUfo);
+            }
+            updateUfosList();  
+
+            movementExecutor.submit(() -> startUfoMovement(newUfo)); 
+
             sleepBetweenAppearances(appearanceTime);
         }
     }
-
+    
     private Ufo createNewUfo(Random random, double speed){
         Point initialPosition = new Point(random.nextInt(UFO_AREA_WIDTH), random.nextInt(UFO_AREA_HEIGHT));
         double angle = random.nextDouble() * 360;
@@ -71,11 +81,16 @@ public class UfoModel{
 
     private void updateUfosList(){
         try {
-            clientHandler.sendMessage("UP_DATE_UFOS " + new Gson().toJson(ufos));
-        } catch (IOException e) {
-            e.printStackTrace();
+            Gson gson = new Gson();
+            String ufosJson = gson.toJson(ufos);
+            System.out.println("Enviando UFOs JSON: " + ufosJson);
+            server.sendMessageToAllClients("UP_DATE_UFOS " + ufosJson);
+        } catch (Exception e) {
+            System.err.println("Error al convertir UFOs a JSON: " + e.getMessage());
         }
+        
     }
+    
 
     private void sleepBetweenAppearances(int appearanceTime){
         try {
@@ -122,7 +137,7 @@ public class UfoModel{
         }
         checkAndHandleOutOfBounds(ufo);
         try {
-            clientHandler.sendMessage("UP_DATE_UFOS " + new Gson().toJson(ufos));
+            server.sendMessageToAllClients("UP_DATE_UFOS " + new Gson().toJson(ufos));
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -269,12 +284,12 @@ public class UfoModel{
     }
     
     private void updatePresenter() {
-    if (clientHandler != null) {
+    if (server != null) {
         try {
-            clientHandler.sendMessage("UFO_CRASHED_COUNT " + totalCrashedCount);
-            clientHandler.sendMessage("UFO_ARRIVAL_COUNT " + totalArrivedCount);
-            clientHandler.sendMessage("UP_DATE_UFOS " + new Gson().toJson(ufos));
-        } catch (IOException e) {
+            server.sendMessageToAllClients("UFO_CRASHED_COUNT " + totalCrashedCount);
+            server.sendMessageToAllClients("UFO_ARRIVAL_COUNT " + totalArrivedCount);
+            server.sendMessageToAllClients("UP_DATE_UFOS " + new Gson().toJson(ufos));
+        } catch (IOException e) { 
             e.printStackTrace();
         }
     }
@@ -297,12 +312,18 @@ public class UfoModel{
                 }
             }
         }
-        if (clientHandler != null) {
+        if (server != null) {
             try {
-                clientHandler.sendMessage("UFO_MOVING_COUNT " + count);
+                server.sendMessageToAllClients("UFO_MOVING_COUNT " + count);
             } catch (IOException e) {
                 e.printStackTrace();
+                try {
+                    server.sendMessageToAllClients("ERROR: Failed to send UFO_MOVING_COUNT");
+                } catch (IOException ex) {
+                    ex.printStackTrace();
+                }
             }
+            
         }
     }
 
@@ -340,19 +361,20 @@ public class UfoModel{
         if (selectedUfo != null) {
             double newSpeed = Math.max(0, selectedUfo.getSpeed() + delta);
             selectedUfo.setSpeed(newSpeed);
-            if (clientHandler != null) {
-                try {
-                    clientHandler.sendMessage("UP_DATE_SPEED " + newSpeed);
-                } catch (IOException e) {
-                    e.printStackTrace();
+            synchronized (selectedUfo) { 
+                if (server != null) {
+                    try {
+                        server.sendMessageToAllClients("UP_DATE_SPEED " + newSpeed);
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
                 }
             }
         }
     }
-
     
     public boolean allUfosStopped(){
-        if (stoppedUfosCount >= clientHandler.getUfoCount()) {
+        if (stoppedUfosCount >= ufoCount) {
             return true;
         }
         return false;
