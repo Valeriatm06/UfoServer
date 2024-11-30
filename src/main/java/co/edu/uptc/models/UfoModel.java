@@ -4,18 +4,14 @@ import lombok.Getter;
 import lombok.Setter;
 import java.awt.Point;
 import java.io.IOException;
-import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-
 import com.google.gson.Gson;
-
 import co.edu.uptc.pojos.Ufo;
-import co.edu.uptc.utilities.ClientHandler;
 
 @Getter
 @Setter

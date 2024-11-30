@@ -3,9 +3,15 @@ package co.edu.uptc.utilities;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.lang.reflect.Type;
 import java.net.Socket;
+import java.util.List;
+
 import com.google.gson.Gson;  
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonParseException;
+import com.google.gson.reflect.TypeToken;
+
 import java.awt.Point;
 
 import co.edu.uptc.models.Server;
@@ -30,6 +36,7 @@ public class ClientHandler implements Runnable {
     private int newXPosition;
     private int newYPosition;
     private Ufo selectedUfo;
+    private List<Point> selectedUfoTrayectory;
     private UfoModel ufoModel;
     private boolean isFirst;
     private Server server;
@@ -77,7 +84,6 @@ public class ClientHandler implements Runnable {
                     sendFirstClient();
                 }else if (message.startsWith("SEND_UFOS_STOPPED")) {
                     sendAllUfosStopped();
-                    System.out.println(ufoModel.allUfosStopped());
                 }else if (message.startsWith("START_GAME")) {
                     ufoModel.startGame(ufoCount, speed, appearanceTime);
                 }else if (message.startsWith("SEND_SELECTED_UFO")) {
@@ -87,6 +93,8 @@ public class ClientHandler implements Runnable {
                     server.sendMessageToAllClients("Cambio de velocidad " + delta);
                 }else if (message.startsWith("START_UFO_MOVEMENT")) {
                     ufoModel.startUfoMovement(selectedUfo);
+                }else if (message.startsWith("TRAYECTORY")) {
+                    handleUfoTrayectory(message);
                 }else {
                     System.out.println("Comando desconocido: " + message);
                 }
@@ -148,26 +156,46 @@ public class ClientHandler implements Runnable {
             Gson gson = gsonBuilder.create();
     
             selectedUfo = gson.fromJson(selectedUfoJson, Ufo.class);
-    
+            selectedUfo.setTrajectory(selectedUfoTrayectory);
             System.out.println("UFO recibido: " + selectedUfo);
         } catch (Exception e) {
             e.printStackTrace();
             System.out.println("Error al deserializar el JSON: " + selectedUfoJson);
         }
     }
+
+    private void handleUfoTrayectory(String message) {
+        String trayectoryJson = message.substring("TRAYECTORY".length()).trim();
+        
+        try {
+            GsonBuilder gsonBuilder = new GsonBuilder();
+            gsonBuilder.registerTypeAdapter(Point.class, new PointAdapter());  
+            Gson gson = gsonBuilder.create();
+            
+            Type listType = new TypeToken<List<Point>>() {}.getType();  
+            List<Point> trayectory = gson.fromJson(trayectoryJson, listType);
+            
+            if (selectedUfo != null) {
+                selectedUfo.setTrajectory(trayectory);  
+            }
+        } catch (JsonParseException e) {
+            e.printStackTrace();
+            System.out.println("Error al deserializar la trayectoria del UFO: " + trayectoryJson);
+        }
+    }
     
 
     private void sendAllUfosStopped() throws IOException{
         boolean isStopped = ufoModel.allUfosStopped();
-        server.sendMessageToAllClients("UFO_STOPPED " + isStopped);
+        server.sendMessageToAllClients("UFO_STOPPED " + String.valueOf(isStopped));
     }
 
     private void sendRunningStatus() throws IOException {
         boolean isRunning = ufoModel.isRunning(); 
-        server.sendMessageToAllClients("UFO_RUNNING " + isRunning);  
+        server.sendMessageToAllClients("UFO_RUNNING " + String.valueOf(isRunning));  
     }
 
     private void sendFirstClient() throws IOException{
-        server.sendMessageToAllClients("FIRST_CLIENT " + isFirst);
+        server.sendMessageToAllClients("FIRST_CLIENT " + String.valueOf(isFirst));
     }
 }
