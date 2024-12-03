@@ -178,20 +178,8 @@ public class UfoModel{
         }
     }
 
-    
-    public void addTrajectoryPointToSelectedUfo(Point point){
-        if (selectedUfo != null) {
-            List<Point> trajectory = selectedUfo.getTrajectory();
-            if (trajectory == null) {
-                trajectory = new ArrayList<>();
-                selectedUfo.setTrajectory(trajectory);
-            }
-            synchronized (trajectory) {
-                if (point != null) {
-                    trajectory.add(point);
-                }
-            }
-        }
+    public void addTrayectory(List<Point> trayectoryList){
+        selectedUfo.setTrajectory(trayectoryList);
     }
 
     private boolean isOutOfBounds(Point position){

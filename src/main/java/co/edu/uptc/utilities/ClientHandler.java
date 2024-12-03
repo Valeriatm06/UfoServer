@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.lang.reflect.Type;
 import java.net.Socket;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import com.google.gson.Gson;  
 import com.google.gson.GsonBuilder;
@@ -40,6 +41,7 @@ public class ClientHandler implements Runnable {
     private UfoModel ufoModel;
     private boolean isFirst;
     private Server server;
+    private String userName;
 
     public ClientHandler(Socket clientSocket, UfoModel ufoModel, Server server) throws IOException {
         this.clientSocket = clientSocket;
@@ -48,6 +50,7 @@ public class ClientHandler implements Runnable {
         this.ufoModel = ufoModel;
         this.isFirst = false;
         this.server = server;
+        selectedUfoTrayectory =  new CopyOnWriteArrayList<>();
     }
 
     @Override
@@ -59,6 +62,10 @@ public class ClientHandler implements Runnable {
                 if (message.startsWith("UFO_COUNT")) {
                     ufoCount = Integer.parseInt(message.split(" ")[1]);
                     System.out.println("Número de UFOs: " + ufoCount);
+                } else if (message.startsWith("USER_NAME")) {
+                    userName = message.split(" ")[1];
+                    server.addClientUserName(userName);
+                    sendUserList();
                 } else if (message.startsWith("SPEED")) {
                     speed = Integer.parseInt(message.split(" ")[1]);
                     System.out.println("Velocidad: " + speed);
@@ -78,12 +85,16 @@ public class ClientHandler implements Runnable {
                     handleSelectedUfo(message);
                 } else if (message.startsWith("SEND_UFOS")) {
                     sendUfosList();
-                } else if (message.startsWith("SEND_RUNNING_STATE")) {
+                } else if (message.startsWith("SEND_USER_LIST")) {
+                    sendUserList();
+                }else if (message.startsWith("SEND_RUNNING_STATE")) {
                     sendRunningStatus();
                 }else if (message.startsWith("IS_FIRST")) {
                     sendFirstClient();
+                    System.out.println(isFirst);
                 }else if (message.startsWith("SEND_UFOS_STOPPED")) {
                     sendAllUfosStopped();
+                    
                 }else if (message.startsWith("START_GAME")) {
                     ufoModel.startGame(ufoCount, speed, appearanceTime);
                 }else if (message.startsWith("SEND_SELECTED_UFO")) {
@@ -105,8 +116,10 @@ public class ClientHandler implements Runnable {
             try {
                 clientSocket.close();  
             } catch (IOException e) {
-                e.printStackTrace();
+                System.out.println("Se cerro la conexión con el cliente");;
             }
+            server.removeClientUserName(userName);
+            server.removeClient(this);  
         }
     }
 
@@ -116,7 +129,7 @@ public class ClientHandler implements Runnable {
 
     public synchronized void sendMessage(String msg) throws IOException {
         output.writeUTF(msg); 
-        output.flush();  
+        output.flush();
     }
 
    
@@ -125,6 +138,19 @@ public class ClientHandler implements Runnable {
         String ufosJson = gson.toJson(ufoModel.getUfosList()); 
 
         server.sendMessageToAllClients("UFOS_LIST " + ufosJson);
+    }
+
+    private void sendUserList(){
+        List<String> stringList = server.getClientsUserNames();
+        Gson gson = new Gson();
+        String jsonList = gson.toJson(stringList);
+        System.out.println("usuarios " + jsonList);
+        try {
+            sendMessage("USERS_LIST " + jsonList);
+        } catch (IOException e) {
+            e.printStackTrace();
+            System.out.println("Error al enviar la lista de strings al cliente.");
+        }
     }
 
     private void sendSelectedUfoAtPosition() {
@@ -154,36 +180,35 @@ public class ClientHandler implements Runnable {
             GsonBuilder gsonBuilder = new GsonBuilder();
             gsonBuilder.registerTypeAdapter(Point.class, new PointAdapter()); 
             Gson gson = gsonBuilder.create();
-    
             selectedUfo = gson.fromJson(selectedUfoJson, Ufo.class);
-            selectedUfo.setTrajectory(selectedUfoTrayectory);
             System.out.println("UFO recibido: " + selectedUfo);
         } catch (Exception e) {
             e.printStackTrace();
             System.out.println("Error al deserializar el JSON: " + selectedUfoJson);
         }
     }
+    
 
     private void handleUfoTrayectory(String message) {
         String trayectoryJson = message.substring("TRAYECTORY".length()).trim();
-        
         try {
             GsonBuilder gsonBuilder = new GsonBuilder();
             gsonBuilder.registerTypeAdapter(Point.class, new PointAdapter());  
             Gson gson = gsonBuilder.create();
             
             Type listType = new TypeToken<List<Point>>() {}.getType();  
-            List<Point> trayectory = gson.fromJson(trayectoryJson, listType);
-            
+            selectedUfoTrayectory = gson.fromJson(trayectoryJson, listType);
             if (selectedUfo != null) {
-                selectedUfo.setTrajectory(trayectory);  
+                selectedUfo.setTrajectory(selectedUfoTrayectory);  
+            } else {
+                System.out.println("Trayectoria recibida pero no hay UFO seleccionado.");
             }
+            add();
         } catch (JsonParseException e) {
             e.printStackTrace();
             System.out.println("Error al deserializar la trayectoria del UFO: " + trayectoryJson);
         }
     }
-    
 
     private void sendAllUfosStopped() throws IOException{
         boolean isStopped = ufoModel.allUfosStopped();
@@ -198,4 +223,9 @@ public class ClientHandler implements Runnable {
     private void sendFirstClient() throws IOException{
         server.sendMessageToAllClients("FIRST_CLIENT " + String.valueOf(isFirst));
     }
+
+    private synchronized void add() {
+        ufoModel.addTrayectory(selectedUfoTrayectory);
+    }
+    
 }
