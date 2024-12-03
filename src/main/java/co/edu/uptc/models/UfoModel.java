@@ -56,15 +56,12 @@ public class UfoModel{
     private void createAndMoveUfos(int ufoNumber, Random random, double speed, int appearanceTime) {
         for (int i = 0; i < ufoNumber; i++) {
             if (!running) break;
-
             Ufo newUfo = createNewUfo(random, speed);
             synchronized (ufos) {
                 ufos.add(newUfo);
             }
             updateUfosList();  
-
             movementExecutor.submit(() -> startUfoMovement(newUfo)); 
-
             sleepBetweenAppearances(appearanceTime);
         }
     }
@@ -87,7 +84,6 @@ public class UfoModel{
         
     }
     
-
     private void sleepBetweenAppearances(int appearanceTime){
         try {
             Thread.sleep(appearanceTime);
@@ -115,9 +111,13 @@ public class UfoModel{
         synchronized (ufo) {  
             updateUfoPosition(ufo);  
             checkCollisions();  
-            countMovingUfos();  
+            try {
+                countMovingUfos();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }  
         }
-}
+    }
 
     private void handleInterruption() {
         Thread.currentThread().interrupt();
@@ -267,7 +267,7 @@ public class UfoModel{
         ufos.removeAll(toRemove);
     }
     
-    private void updatePresenter() {
+    private synchronized void updatePresenter() {
     if (server != null) {
         try {
             server.sendMessageToAllClients("UFO_CRASHED_COUNT " + totalCrashedCount);
@@ -287,7 +287,7 @@ public class UfoModel{
         return distance < collisionDistance;
     }
 
-    public void countMovingUfos(){
+    public void countMovingUfos() throws IOException{
         int count = 0;
         synchronized (ufos) {
             for (Ufo ufo : ufos) {
@@ -297,19 +297,10 @@ public class UfoModel{
             }
         }
         if (server != null) {
-            try {
                 server.sendMessageToAllClients("UFO_MOVING_COUNT " + count);
-            } catch (IOException e) {
-                e.printStackTrace();
-                try {
-                    server.sendMessageToAllClients("ERROR: Failed to send UFO_MOVING_COUNT");
-                } catch (IOException ex) {
-                    ex.printStackTrace();
-                }
             }
             
         }
-    }
 
     private boolean isInArrivalArea(Point position){
         return position.x >= ARRIVAL_AREA_X && position.x <= ARRIVAL_AREA_X + ARRIVAL_AREA_WIDTH &&
@@ -341,17 +332,13 @@ public class UfoModel{
     
 
     
-    public void changeSelectedUfoSpeed(int delta){
+    public void changeSelectedUfoSpeed(int delta) throws IOException{
         if (selectedUfo != null) {
             double newSpeed = Math.max(0, selectedUfo.getSpeed() + delta);
             selectedUfo.setSpeed(newSpeed);
             synchronized (selectedUfo) { 
                 if (server != null) {
-                    try {
                         server.sendMessageToAllClients("UP_DATE_SPEED " + newSpeed);
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
                 }
             }
         }

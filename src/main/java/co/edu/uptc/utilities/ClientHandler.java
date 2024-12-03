@@ -1,23 +1,20 @@
 package co.edu.uptc.utilities;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
-import java.lang.reflect.Type;
-import java.net.Socket;
-import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
-
-import com.google.gson.Gson;  
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonParseException;
+import com.google.gson.*;
 import com.google.gson.reflect.TypeToken;
-
-import java.awt.Point;
 
 import co.edu.uptc.models.Server;
 import co.edu.uptc.models.UfoModel;
 import co.edu.uptc.pojos.Ufo;
+
+import java.awt.Point;
+import java.io.*;
+import java.lang.reflect.Type;
+import java.net.Socket;
+import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
+
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -30,12 +27,7 @@ public class ClientHandler implements Runnable {
     private Socket clientSocket;
     private DataInputStream input;
     private DataOutputStream output;
-    private int ufoCount;
-    private int speed;
-    private int appearanceTime;
-    private int delta;
-    private int newXPosition;
-    private int newYPosition;
+    private int ufoCount, speed, appearanceTime, delta, newXPosition, newYPosition;
     private Ufo selectedUfo;
     private List<Point> selectedUfoTrayectory;
     private UfoModel ufoModel;
@@ -43,14 +35,18 @@ public class ClientHandler implements Runnable {
     private Server server;
     private String userName;
 
+    private Map<String, Consumer<String>> commandHandlers;
+
     public ClientHandler(Socket clientSocket, UfoModel ufoModel, Server server) throws IOException {
         this.clientSocket = clientSocket;
         this.input = new DataInputStream(clientSocket.getInputStream());
         this.output = new DataOutputStream(clientSocket.getOutputStream());
         this.ufoModel = ufoModel;
-        this.isFirst = false;
         this.server = server;
-        selectedUfoTrayectory =  new CopyOnWriteArrayList<>();
+        this.isFirst = false;
+        this.selectedUfoTrayectory = new CopyOnWriteArrayList<>();
+        this.commandHandlers = new HashMap<>();
+        initializeCommandHandlers();
     }
 
     @Override
@@ -58,174 +54,189 @@ public class ClientHandler implements Runnable {
         try {
             String message;
             while ((message = receiveMessage()) != null) {
-                // System.out.println("Mensaje recibido: " + message);
-                if (message.startsWith("UFO_COUNT")) {
-                    ufoCount = Integer.parseInt(message.split(" ")[1]);
-                    System.out.println("Número de UFOs: " + ufoCount);
-                } else if (message.startsWith("USER_NAME")) {
-                    userName = message.split(" ")[1];
-                    server.addClientUserName(userName);
-                    sendUserList();
-                } else if (message.startsWith("SPEED")) {
-                    speed = Integer.parseInt(message.split(" ")[1]);
-                    System.out.println("Velocidad: " + speed);
-                } else if (message.startsWith("APPEARANCE_TIME")) {
-                    appearanceTime = Integer.parseInt(message.split(" ")[1]);
-                    System.out.println("Tiempo de aparición: " + appearanceTime);
-                } else if (message.startsWith("SELECTED_UFO_SPEED")) {
-                    delta = Integer.parseInt(message.split(" ")[1]);
-                    System.out.println("Velocidad nueva: " + delta);
-                } else if (message.startsWith("X_POSITION")) {
-                    newXPosition = Integer.parseInt(message.split(" ")[1]);
-                    System.out.println("Posición en x: " + newXPosition);
-                } else if (message.startsWith("Y_POSITION")) {
-                    newYPosition = Integer.parseInt(message.split(" ")[1]);
-                    System.out.println("Posición en y: " + newYPosition);
-                } else if (message.startsWith("SELECTED_UFO")) {
-                    handleSelectedUfo(message);
-                } else if (message.startsWith("SEND_UFOS")) {
-                    sendUfosList();
-                } else if (message.startsWith("SEND_USER_LIST")) {
-                    sendUserList();
-                }else if (message.startsWith("SEND_RUNNING_STATE")) {
-                    sendRunningStatus();
-                }else if (message.startsWith("IS_FIRST")) {
-                    sendFirstClient();
-                    System.out.println(isFirst);
-                }else if (message.startsWith("SEND_UFOS_STOPPED")) {
-                    sendAllUfosStopped();
-                    
-                }else if (message.startsWith("START_GAME")) {
-                    ufoModel.startGame(ufoCount, speed, appearanceTime);
-                }else if (message.startsWith("SEND_SELECTED_UFO")) {
-                    sendSelectedUfoAtPosition();
-                }else if (message.startsWith("CHANGE_SELECTED_UFO_SPEED")) {
-                    ufoModel.changeSelectedUfoSpeed(delta);
-                    server.sendMessageToAllClients("Cambio de velocidad " + delta);
-                }else if (message.startsWith("START_UFO_MOVEMENT")) {
-                    ufoModel.startUfoMovement(selectedUfo);
-                }else if (message.startsWith("TRAYECTORY")) {
-                    handleUfoTrayectory(message);
-                }else {
-                    System.out.println("Comando desconocido: " + message);
-                }
+                String command = extractCommand(message);
+                commandHandlers.getOrDefault(command, this::unknownCommand).accept(message);
             }
         } catch (IOException e) {
             e.printStackTrace();
         } finally {
-            try {
-                clientSocket.close();  
-            } catch (IOException e) {
-                System.out.println("Se cerro la conexión con el cliente");;
-            }
-            server.removeClientUserName(userName);
-            server.removeClient(this);  
+            cleanUp();
         }
+    }
+
+    private void initializeCommandHandlers() {
+        initializeGameControlCommands();
+        initializeUfoControlCommands();
+        initializeClientCommunicationCommands();
+    }
+    
+
+    private void initializeGameControlCommands() {
+        commandHandlers.put("START_GAME", msg -> ufoModel.startGame(ufoCount, speed, appearanceTime));
+        commandHandlers.put("SEND_RUNNING_STATE", msg -> {sendRunningStatus();});
+        commandHandlers.put("IS_FIRST", msg -> {sendFirstClient();});
+    }
+
+    private void initializeUfoControlCommands() {
+        commandHandlers.put("UFO_COUNT", this::handleUfoCount);
+        commandHandlers.put("SPEED", msg -> speed = parseIntParameter(msg));
+        commandHandlers.put("X_POSITION", msg -> newXPosition = parseIntParameter(msg));
+        commandHandlers.put("Y_POSITION", msg -> newYPosition = parseIntParameter(msg));
+        commandHandlers.put("APPEARANCE_TIME", msg -> appearanceTime = parseIntParameter(msg));
+        commandHandlers.put("SELECTED_UFO_SPEED", msg -> delta = parseIntParameter(msg));
+        commandHandlers.put("START_UFO_MOVEMENT", msg -> ufoModel.startUfoMovement(selectedUfo));
+        commandHandlers.put("CHANGE_SELECTED_UFO_SPEED", msg -> {changeSelectedUfoSpeed();});
+        commandHandlers.put("TRAYECTORY", this::handleUfoTrayectory);
+        commandHandlers.put("SEND_SELECTED_UFO", msg -> sendSelectedUfoAtPosition());
+        commandHandlers.put("SELECTED_UFO", this::handleSelectedUfo);
+    }
+    
+    private void initializeClientCommunicationCommands() {
+        commandHandlers.put("USER_NAME", this::handleUserName);
+        commandHandlers.put("SEND_UFOS", msg -> sendUfosList());
+        commandHandlers.put("SEND_USER_LIST", msg -> sendUserList());
+        commandHandlers.put("SEND_UFOS_STOPPED", msg -> {sendAllUfosStopped();});
     }
 
     private String receiveMessage() throws IOException {
-        return input.readUTF();  
+        return input.readUTF();
     }
 
     public synchronized void sendMessage(String msg) throws IOException {
-        output.writeUTF(msg); 
+        output.writeUTF(msg);
         output.flush();
     }
 
-   
-    private void sendUfosList() throws IOException {
-        Gson gson = new Gson();
-        String ufosJson = gson.toJson(ufoModel.getUfosList()); 
-
-        server.sendMessageToAllClients("UFOS_LIST " + ufosJson);
-    }
-
-    private void sendUserList(){
-        List<String> stringList = server.getClientsUserNames();
-        Gson gson = new Gson();
-        String jsonList = gson.toJson(stringList);
-        System.out.println("usuarios " + jsonList);
+    private void cleanUp() {
         try {
-            sendMessage("USERS_LIST " + jsonList);
+            clientSocket.close();
         } catch (IOException e) {
-            e.printStackTrace();
-            System.out.println("Error al enviar la lista de strings al cliente.");
+            System.out.println("Conexión con cliente cerrada.");
         }
+        server.removeClientUserName(userName);
+        server.removeClient(this);
     }
 
-    private void sendSelectedUfoAtPosition() {
-        Ufo ufo = ufoModel.selectUfoAtPosition(newXPosition, newYPosition);
-    
-        if (ufo != null) {
-            Gson gson = new Gson();
-            String ufoJson = gson.toJson(ufo);
-    
-            try {
-                sendMessage("SINGLE_UFO " + ufoJson);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        } else {
-            try {
-                server.sendMessageToAllClients("ERROR UFO not found at position (" + newXPosition + ", " + newYPosition + ")");
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
+    private String extractCommand(String message) {
+        return message.contains(" ") ? message.split(" ")[0] : message;
+    }
+
+    private int parseIntParameter(String message) {
+        return Integer.parseInt(message.split(" ")[1]);
+    }
+
+    private void unknownCommand(String message) {
+        System.out.println("Comando desconocido: " + message);
+    }
+
+    private void handleUfoCount(String message) {
+        ufoCount = parseIntParameter(message);
+        System.out.println("Número de UFOs: " + ufoCount);
+    }
+
+    private void handleUserName(String message) {
+        userName = message.split(" ")[1];
+        server.addClientUserName(userName);
+        sendUserList();
     }
 
     private void handleSelectedUfo(String message) {
         String selectedUfoJson = message.substring("SELECTED_UFO".length()).trim();
         try {
-            GsonBuilder gsonBuilder = new GsonBuilder();
-            gsonBuilder.registerTypeAdapter(Point.class, new PointAdapter()); 
-            Gson gson = gsonBuilder.create();
+            Gson gson = createGsonWithPointAdapter();
             selectedUfo = gson.fromJson(selectedUfoJson, Ufo.class);
             System.out.println("UFO recibido: " + selectedUfo);
-        } catch (Exception e) {
+        } catch (JsonParseException e) {
             e.printStackTrace();
             System.out.println("Error al deserializar el JSON: " + selectedUfoJson);
         }
     }
-    
 
     private void handleUfoTrayectory(String message) {
         String trayectoryJson = message.substring("TRAYECTORY".length()).trim();
         try {
-            GsonBuilder gsonBuilder = new GsonBuilder();
-            gsonBuilder.registerTypeAdapter(Point.class, new PointAdapter());  
-            Gson gson = gsonBuilder.create();
-            
-            Type listType = new TypeToken<List<Point>>() {}.getType();  
+            Gson gson = createGsonWithPointAdapter();
+            Type listType = new TypeToken<List<Point>>() {}.getType();
             selectedUfoTrayectory = gson.fromJson(trayectoryJson, listType);
-            if (selectedUfo != null) {
-                selectedUfo.setTrajectory(selectedUfoTrayectory);  
-            } else {
-                System.out.println("Trayectoria recibida pero no hay UFO seleccionado.");
-            }
-            add();
+            // if (selectedUfo != null) {
+            //     selectedUfo.setTrajectory(selectedUfoTrayectory);
+            // } else {
+            //     System.out.println("Trayectoria recibida pero no hay UFO seleccionado.");
+            // }
+            ufoModel.addTrayectory(selectedUfoTrayectory);
         } catch (JsonParseException e) {
             e.printStackTrace();
-            System.out.println("Error al deserializar la trayectoria del UFO: " + trayectoryJson);
         }
     }
 
-    private void sendAllUfosStopped() throws IOException{
+    private Gson createGsonWithPointAdapter() {
+        return new GsonBuilder().registerTypeAdapter(Point.class, new PointAdapter()).create();
+    }
+
+    private void sendUfosList() {
+        try {
+            String ufosJson = new Gson().toJson(ufoModel.getUfosList());
+            server.sendMessageToAllClients("UFOS_LIST " + ufosJson);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void sendUserList() {
+        try {
+            String jsonList = new Gson().toJson(server.getClientsUserNames());
+            sendMessage("USERS_LIST " + jsonList);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void sendSelectedUfoAtPosition() {
+        Ufo ufo = ufoModel.selectUfoAtPosition(newXPosition, newYPosition);
+        try {
+            if (ufo != null) {
+                String ufoJson = new Gson().toJson(ufo);
+                sendMessage("SINGLE_UFO " + ufoJson);
+            } else {
+                server.sendMessageToAllClients("ERROR UFO not found at position (" + newXPosition + ", " + newYPosition + ")");
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void sendAllUfosStopped(){
         boolean isStopped = ufoModel.allUfosStopped();
-        server.sendMessageToAllClients("UFO_STOPPED " + String.valueOf(isStopped));
+        try {
+            server.sendMessageToAllClients("UFO_STOPPED " + isStopped);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
-    private void sendRunningStatus() throws IOException {
-        boolean isRunning = ufoModel.isRunning(); 
-        server.sendMessageToAllClients("UFO_RUNNING " + String.valueOf(isRunning));  
+    private void sendRunningStatus(){
+        boolean isRunning = ufoModel.isRunning();
+        try {
+            server.sendMessageToAllClients("UFO_RUNNING " + isRunning);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
-    private void sendFirstClient() throws IOException{
-        server.sendMessageToAllClients("FIRST_CLIENT " + String.valueOf(isFirst));
+    private void sendFirstClient(){
+        try {
+            server.sendMessageToAllClients("FIRST_CLIENT " + isFirst);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
-    private synchronized void add() {
-        ufoModel.addTrayectory(selectedUfoTrayectory);
+    private void changeSelectedUfoSpeed(){
+        try {
+            ufoModel.changeSelectedUfoSpeed(delta);
+            server.sendMessageToAllClients("Cambio de velocidad " + delta);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
-    
 }
